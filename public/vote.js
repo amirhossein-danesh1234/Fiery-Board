@@ -52,6 +52,7 @@ function render(){
 async function refresh(){
   if(!state.authenticated || state.fetching)return;
   state.fetching=true;
+  let shouldRender=true;
   try{const next=await api('/api/voter/room');
     const old=state.room?.stage;
     if(!old || next.stage?.currentStage!==old.currentStage) {state.scoreDraft='';state.voteError='';}
@@ -59,10 +60,10 @@ async function refresh(){
     const sameCounts=old?.submittedCount===next.stage?.submittedCount && old?.submitted===next.stage?.submitted;
     const sameStatus=state.room?.status===next.status;
     state.room=next;state.error='';state.lastSync=Date.now();
-    if(sameStep && sameCounts && sameStatus && next.status==='active' && !next.stage?.completed)return;
+    if(sameStep && sameCounts && sameStatus && next.status==='active' && !next.stage?.completed){shouldRender=false;return;}
   }
   catch(e){if(e.status===401){state.authenticated=false;state.room=null;}state.error=e.message;}
-  finally{state.fetching=false;render();}
+  finally{state.fetching=false;if(shouldRender)render();}
 }
 root.addEventListener('submit',async e=>{
   if(e.target.id==='score-form'){
