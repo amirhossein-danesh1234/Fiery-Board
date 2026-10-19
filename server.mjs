@@ -174,6 +174,9 @@ function failedLogin(ip) { const attempt = failedLogins.get(ip); if (attempt) at
 function cookie(value, secure) { return `fb_session=${value}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${value ? SESSION_AGE : 0}${secure ? '; Secure' : ''}`; }
 const files = { '/': ['public/index.html', 'text/html; charset=utf-8'], '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'], '/vote': ['public/vote.html', 'text/html; charset=utf-8'], '/vote.js': ['public/vote.js', 'text/javascript; charset=utf-8'], '/vote.css': ['public/vote.css', 'text/css; charset=utf-8'], '/results': ['public/results.html', 'text/html; charset=utf-8'], '/results.js': ['public/results.js', 'text/javascript; charset=utf-8'], '/results.css': ['public/results.css', 'text/css; charset=utf-8'] };
 
+files['/fonts/calibri-regular.woff'] = ['public/fonts/calibri-regular.woff', 'font/woff'];
+files['/fonts/calibri-bold.woff'] = ['public/fonts/calibri-bold.woff', 'font/woff'];
+
 export function makeServer(db) {
   return createServer(async (req, res) => {
     securityHeaders(res);
