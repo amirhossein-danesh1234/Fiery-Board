@@ -1,7 +1,7 @@
 FROM node:24-bookworm-slim
 ENV NODE_ENV=production
 WORKDIR /app
-COPY package.json server.mjs voter-service.mjs ./
+COPY package.json server.mjs voter-service.mjs game-engine.mjs ./
 COPY public ./public
 RUN mkdir -p /data && chown -R node:node /data /app
 USER node
