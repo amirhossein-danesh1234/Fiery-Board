@@ -226,7 +226,7 @@ export function makeServer(db) {
 }
 
 if (process.argv[1] && resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 12) { console.error('Set ADMIN_PASSWORD (minimum 12 characters) before starting.'); process.exit(1); }
+  if (!ADMIN_PASSWORD || ADMIN_PASSWORD.length < 12 || ADMIN_PASSWORD.startsWith('REPLACE_')) { console.error('Set ADMIN_PASSWORD (minimum 12 characters) before starting.'); process.exit(1); }
   const db = initDatabase(DB_PATH);
   makeServer(db).listen(PORT, '0.0.0.0', () => console.log(`Fiery Board admin listening on port ${PORT}`));
 }
