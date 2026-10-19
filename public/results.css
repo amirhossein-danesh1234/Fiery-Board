@@ -1,5 +1,5 @@
 
-:root{font-family:Tahoma,"Segoe UI",sans-serif;color:#172a50;background:#f5f8fd;font-synthesis:none;-webkit-font-smoothing:antialiased}
+:root{font-family:Calibri,"Segoe UI",Tahoma,sans-serif;color:#172a50;background:#f5f8fd;font-synthesis:none;-webkit-font-smoothing:antialiased}
 *{box-sizing:border-box}body{margin:0;min-height:100vh;background:#f5f8fd}button,select{font:inherit}button{cursor:pointer}
 .topbar{display:flex;align-items:center;justify-content:space-between;gap:20px;padding:16px clamp(20px,4vw,70px);background:#fff;border-bottom:1px solid #edf1f7}
 .brand{display:flex;align-items:center;gap:12px}.flame{font-size:33px}.brand b{font-size:23px;display:block}.brand small{display:block;color:#6380aa;font-size:11px;margin-top:5px}
