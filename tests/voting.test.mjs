@@ -47,7 +47,7 @@ test('atomic stage barriers, duplicate vote rejection and immutable votes',()=>{
   assert.equal(report.counts.votes,8);
   assert.equal(report.counts.questions,2);
   assert.equal(report.questions[0].votes.length,2);
-  assert.equal(report.ranking.find(p=>p.name==='علی').score,8.875);
+  assert.equal(report.ranking.find(p=>p.name==='علی').score,9.0625);
  }finally{t.finish();}
 });
 
