@@ -1,55 +1,69 @@
-# Fiery Board — Admin + Voter Waiting Room
+# Fiery Board — تخته آتشین
 
-Self-hosted Persian RTL admin panel for a synchronized group rating game. This repository implements **the admin page and voter entrance/waiting room**. Live scoring and results pages are not yet implemented. The application is deployable as-is and does not pretend that voting is already implemented.
+A lightweight RTL Persian group-scoring application built with native Node.js 24, SQLite and plain browser JavaScript. No frontend build step or third-party runtime packages required.
 
-## Features
-- Single responsive, sidebar-free dashboard matching the approved design.
-- Create a game with variable participants, weighted questions and named voters (1–500 of each).
-- Cryptographically random voter access codes shown **once** after creation; only SHA-256 hashes are stored in SQLite. Export them to CSV before closing the modal.
-- Persist created games and their related participants/questions/voters in a server-side SQLite volume.
-- Search/filter game history and view details. Games start as `draft` and transition atomically to `active` as soon as all voters are present.
-- Password-protected admin session via secure HttpOnly cookie. State-changing endpoints enforce `Origin` matching.
-- Public `/vote` route with code-only access (no username or voter registration), 5-second polling, roster and live connection counts.
-- One live browser session per voter code, HttpOnly session cookies and automatic recovery after device inactivity (~45 seconds). Presence is refreshed on each poll and game start is server-controlled; stored sessions survive restarts.
-- Built-in Node.js HTTP server; no frontend build, npm install, third-party runtime dependency or code generation required.
+## Live flows
 
-## Local start
-Node.js >= 22.13:
+**Admin:** `https://fb-admin.amirhossein-danesh.ir`
+
+- Password-protected setup dashboard, variable number of participants, named voters, questions and positive weights.
+- Secure access codes are displayed once, with only SHA-256 digests persisted.
+- Previous games and completed-game result reports.
+
+**Voters:** `https://fiery-board.amirhossein-danesh.ir`
+
+- Code-only login, one active device per code, auto-start waiting room.
+- Strict synchronized step-by-step voting: question 1 for each participant, then question 2, etc.
+- Every stage requires one irrevocable score between 0 and 10 (decimals accepted) from **every voter** before advancing. Atomic transaction is the authority; UI polls every five seconds.
+- Automatic navigation to results after the final stage.
+
+**Results:** `/results` on both domains (authenticated admin via `?game=<id>` on admin host, logged-in voters on public host).
+
+- Ranked weighted final score per participant.
+- `جزئیات نمرات` tab: question, weight, per-question average and weighted contribution.
+- `مشاهده آرا` tab: per-voter rows and per-question columns for selected participant, with question averages.
+- Public individual vote visibility is controlled by the game's `showIndividualVotes` configuration; administrators can see the full report. CSV export follows the same rule.
+- No chart comparison or game-settings tabs.
+
+## Data model
+
+All data lives in one persistent SQLite database, shared by the two hostnames. The `games` table keeps a `current_stage` integer migrated at startup if missing. Votes have database-level uniqueness per (game, voter, participant, question), and stages advance atomically in `BEGIN IMMEDIATE` transactions. Weighted score formula:
+
+`S(person) = Σ(question_weight × mean(voter_scores)) / Σ(question_weight)`
+
+Rounding applies to display; calculation uses the unrounded averages. Completed games must contain every expected vote; partial runs do not produce final results.
+
+## Local verification
+
+Requires Node.js 22.13+ (production Docker uses Node 24):
 
 ```bash
-export ADMIN_PASSWORD='your-strong-unique-password'
-export PUBLIC_ORIGIN='http://localhost:3108'
+export ADMIN_PASSWORD='your-own-long-random-admin-password'
+export ADMIN_ORIGIN='http://localhost:3108'
+export VOTER_ORIGIN='http://localhost:3108'
 export DB_PATH='./data/fiery-board.sqlite'
+node --test
 node server.mjs
-# http://localhost:3108
 ```
 
-`node --test` runs unit and HTTP integration tests.
+Development paths: `/` admin, `/vote` voter and `/results?admin=1&game=<id>` admin results. The hostnames enforce their respective landing pages in production.
 
-## Production deployment (existing Linux server + Nginx)
-1. Point the DNS `A`/`AAAA` record for `fb-admin.amirhossein-danesh.ir` to the server's public IP (only add AAAA if IPv6 works).
-2. Clone this repo on the server and set a strong `ADMIN_PASSWORD` in a local `.env` file (see `.env.example`, **do not commit it**).
-3. Run `docker compose up -d --build`. The container listens only at `127.0.0.1:3108` on the host, avoiding conflicts with existing services; the SQLite database lives in the persistent Docker volume `fiery_board_data`.
-4. For a host running Nginx, copy `deploy/nginx.conf` to `/etc/nginx/sites-available/fb-admin.amirhossein-danesh.ir`, link it under `sites-enabled`, run `nginx -t && systemctl reload nginx`, then `certbot --nginx -d fb-admin.amirhossein-danesh.ir` to provision/enable HTTPS. Certbot must complete successfully; keep HTTPS enabled before production use.
-5. Check `https://fb-admin.amirhossein-danesh.ir/healthz` for `{ "ok": true }`, then open the dashboard and log in. Voters use `https://fb-admin.amirhossein-danesh.ir/vote`.
+## Deployment: existing Linux host and reverse proxy
 
-No source-code changes are required. DNS, TLS and a suitable reverse-proxy route are **external deployment steps**, not things a GitHub commit can configure on its own. If host ports 80/443 are already handled by another proxy, add a route to `127.0.0.1:3108` to that proxy instead of installing a second listener. Never expose port 3108 publicly.
+1. Add DNS A (and optionally AAAA) records for both `fb-admin.amirhossein-danesh.ir` and `fiery-board.amirhossein-danesh.ir` pointing at the actual web server.
+2. Pull the repository. Create a private `.env` from `.env.example` and fill **only** `ADMIN_PASSWORD` with a secure random value; never commit secrets.
+3. Run `docker compose up -d --build`. The app listens on host `127.0.0.1:3108`; persistent volume is `fiery_board_data`.
+4. Merge the two blocks in `deploy/nginx.conf` into the existing Nginx configuration (avoid duplicate `server_name` blocks). Test with `nginx -t`, reload, then issue HTTPS certificates using `certbot --nginx -d fb-admin.amirhossein-danesh.ir -d fiery-board.amirhossein-danesh.ir`.
+5. Confirm both `/healthz` URLs, create a sample game in admin, open distinct private-window voter logins with the issued codes, complete all questions, verify final results in both authenticated interfaces, and restart the container to verify persistence.
 
-### Deployment acceptance checks
-- `docker compose config` and `docker compose up -d --build` succeed.
-- `/healthz` returns HTTP 200, access to `/api/games` without login returns 401.
-- Login with `ADMIN_PASSWORD`, create a game with different counts of participants/questions/voters, export codes, then refresh and confirm history persists.
-- Check browser at 1440px and 390px; RTL and all cards should be usable.
-- Test a restart (`docker compose restart`) and verify the saved game remains visible.
-- On `/vote`, enter one issued code. Verify the corresponding named voter appears in the waiting room; a second browser using the same code must receive HTTP 409 while the first is active. Repeat with all distinct codes and verify status becomes `active` in the database and waiting room.
-- Wait >45 seconds without polling from the original browser, then verify the same code can recover access from another device; the previous session becomes invalid.
+Both hostname routes are ready **in code**. DNS/TLS/reverse proxy/server deployment require server access and are not performed by merging a GitHub commit. If using Caddy or another existing proxy, route both hostnames to `127.0.0.1:3108` and preserve the `Host` header; do not deploy a second proxy on ports 80/443. No application-source edits are needed for these deployment steps.
 
-## Security and product limitations
-- **Access code ≠ hash:** The person receives a random bearer access code; only its hash is stored. It is not sufficient to prevent one human receiving multiple different codes. Distribute exactly one code per authorized voter; the current backend enforces one active voter session per code, and the votes table already has unique vote constraints.
-- Codes are shown only at game creation, so export and distribute them securely. The admin cannot retrieve their plaintext from game history. Lost codes require a future rotation flow.
-- Sessions expire after 12 hours; passwords are configured on the server, not baked into the container.
-- Games automatically change from draft to active after all named voters connect; this does **not** yet display a score input. The waiting room explicitly shows that the scoring screen is not implemented. The `votes` table has a unique `(game, voter, participant, question)` constraint but **no voting or results API** is shipped in this phase.
-- A user may enter only one code per device at a time; this cannot establish one physical human per identity or stop someone from sharing credentials. Operator must distribute codes privately.
-- **Clock/presence:** online means an authenticated `/api/voter/room` poll in the last 45 seconds. Idle browsers can be superseded after the timeout. A game once started is not rolled back if a voter disconnects.
-- Until stage 3 is implemented, do not use this service to conduct a real vote: starting a game only updates its status.
-- Back up the Docker volume, including SQLite WAL data. Avoid manually editing the database while the app is running.
+## Security and operational notes
+
+- Admin session cookies and voter session cookies are HttpOnly, SameSite=Strict, with Secure on HTTPS. Cross-origin requests are rejected for state-changing APIs.
+- Host-based routing prevents the admin UI/API from being served through the public hostname.
+- One active voter session is enforced for each access code, but this does not prove that one person holds only one code; distribution remains an organizer responsibility.
+- A lost access code cannot be recovered as plaintext. Back up issued codes securely when creating the game.
+- Voter presence times out after about 45 seconds; a returning voter retains prior immutable votes.
+- Large games generate many votes (participants × questions × voters). The present implementation is intended for modest group sessions; performance limits should be load-tested before hundreds of users.
+- Back up the Docker volume including WAL; never delete it during routine redeployments.
