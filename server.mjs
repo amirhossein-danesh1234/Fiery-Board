@@ -183,7 +183,7 @@ export function makeServer(db) {
     const host=(req.headers.host || '').split(':')[0].toLowerCase();
     const publicHost=host==='fiery-board.amirhossein-danesh.ir';
     const adminHost=host==='fb-admin.amirhossein-danesh.ir';
-    if(publicHost && (pathname==='/' || pathname==='/app.js' || pathname==='/styles.css' || pathname.startsWith('/api/games') || pathname==='/api/login' || pathname==='/api/logout' || pathname==='/api/session')) return json(res,404,{error:'مسیر پیدا نشد.'});
+    if(publicHost && ( pathname==='/app.js' || pathname==='/styles.css' || pathname.startsWith('/api/games') || pathname==='/api/login' || pathname==='/api/logout' || pathname==='/api/session')) return json(res,404,{error:'مسیر پیدا نشد.'});
     if(adminHost && (pathname==='/vote' || pathname==='/vote.js' || pathname==='/vote.css' || pathname.startsWith('/api/voter/'))) return json(res,404,{error:'مسیر پیدا نشد.'});
     if (pathname === '/healthz') return json(res, 200, { ok: true });
     if (pathname.startsWith('/api/')) {
@@ -231,7 +231,7 @@ export function makeServer(db) {
       }
     }
     if (method !== 'GET' && method !== 'HEAD') { res.writeHead(405); return res.end(); }
-    const asset = files[pathname];
+    const asset = files[publicHost && pathname==='/' ? '/vote' : pathname];
     if (!asset) { res.writeHead(404); return res.end('Not found'); }
     try {
       const data = readFileSync(join(root, asset[0]));
