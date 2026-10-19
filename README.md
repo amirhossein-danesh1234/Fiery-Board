@@ -7,14 +7,14 @@ A lightweight RTL Persian group-scoring application built with native Node.js 24
 **Admin:** `https://fb-admin.amirhossein-danesh.ir`
 
 - Password-protected setup dashboard, variable number of participants, named voters, questions and positive weights.
-- Secure access codes are displayed once, with only SHA-256 digests persisted.
+- Account codes remain available to authenticated administrators. Authentication uses SHA-256 digests; recoverable copies use AES-256-GCM and a private `/data/access-codes.key` stored in the persistent volume. Back up this key with the database. Legacy hash-only codes cannot be recovered; explicit regeneration invalidates old codes and voter sessions while retaining votes.
 - Previous games and completed-game result reports.
 
 **Voters:** `https://fiery-board.amirhossein-danesh.ir`
 
-- Code-only login, one active device per code, auto-start waiting room.
+- Game code plus account code login, one active device per account code, auto-start waiting room. Every game has a unique eight-character code, including migrated games. Multiple games run independently.
 - Strict synchronized step-by-step voting: question 1 for each participant, then question 2, etc.
-- Every stage requires one irrevocable score between 0 and 10 (decimals accepted) from **every voter** before advancing. Atomic transaction is the authority; UI polls every five seconds.
+- Every stage requires one irrevocable score between 0 and 10 (decimals accepted) from **every voter** before advancing. Atomic transaction is the authority; UI polls every 1.5 seconds while voting, every 3 seconds while waiting or paused, and every 15 seconds in background tabs. Requests never overlap, network failures back off to 30 seconds, and presence writes are throttled to once per 10 seconds.
 - Automatic navigation to results after the final stage.
 
 **Results:** `/results` on both domains (authenticated admin via `?game=<id>` on admin host, logged-in voters on public host).
@@ -23,7 +23,10 @@ A lightweight RTL Persian group-scoring application built with native Node.js 24
 - `جزئیات نمرات` tab: question, weight, per-question average and weighted contribution.
 - `مشاهده آرا` tab: per-voter rows and per-question columns for selected participant, with question averages.
 - Public individual vote visibility is controlled by the game's `showIndividualVotes` configuration; administrators can see the full report. CSV export follows the same rule.
+- An all-participants table shows the mean received score for each question, plus each participant's weighted final score. It never exposes individual ballots.
+- Administrators can pause/resume without losing votes or stage progress, retrieve account codes, and permanently delete a game and its associated ballots after a dedicated confirmation. Completed games stay completed.
 - No chart comparison or game-settings tabs.
+- All product pages serve the nine Peyda weights from the supplied font archive; no system font installation is required.
 
 ## Data model
 
@@ -63,7 +66,7 @@ Both hostname routes are ready **in code**. DNS/TLS/reverse proxy/server deploym
 - Admin session cookies and voter session cookies are HttpOnly, SameSite=Strict, with Secure on HTTPS. Cross-origin requests are rejected for state-changing APIs.
 - Host-based routing prevents the admin UI/API from being served through the public hostname.
 - One active voter session is enforced for each access code, but this does not prove that one person holds only one code; distribution remains an organizer responsibility.
-- A lost access code cannot be recovered as plaintext. Back up issued codes securely when creating the game.
+- Recoverable account codes are available only through authenticated admin routes. Back up the database and `access-codes.key` together. Replacing the key makes stored encrypted codes unreadable; it does not affect existing code hashes or votes.
 - Voter presence times out after about 45 seconds; a returning voter retains prior immutable votes.
 - Large games generate many votes (participants × questions × voters). The present implementation is intended for modest group sessions; performance limits should be load-tested before hundreds of users.
 - Back up the Docker volume including WAL; never delete it during routine redeployments.

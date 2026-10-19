@@ -76,7 +76,7 @@ test('voter submits using authenticated code; results are private until game com
   assert.equal((await request('/api/voter/submit','POST',{step:0,score:8})).status,401);
   assert.equal((await request('/api/voter/results')).status,401);
   const cookies=[];
-  for(const {code} of t.created.codes){const login=await request('/api/voter/login','POST',{code});assert.equal(login.status,200);cookies.push(login.cookie);}
+  for(const {code} of t.created.codes){const login=await request('/api/voter/login','POST',{code,gameCode:t.created.gameCode});assert.equal(login.status,200);cookies.push(login.cookie);}
   assert.equal((await request('/api/voter/results','GET',null,cookies[0])).status,409);
   for(let step=0;step<4;step++){
    for(let j=0;j<cookies.length;j++){

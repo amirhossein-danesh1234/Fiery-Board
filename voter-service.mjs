@@ -27,12 +27,12 @@ function currentVoter(db, req) {
     FROM voter_sessions s JOIN voters v ON v.id=s.voter_id
     WHERE s.session_hash=? AND s.expires_at>?`).get(sha(raw),Date.now()) || null;
 }
-function limited(ip) {
+function limited(ip, record=false) {
   const now=Date.now();
   if(attempts.size>5000) attempts.clear();
   const item=attempts.get(ip);
-  if(!item || now-item.start>15*60*1000) {attempts.set(ip,{start:now,count:1});return false;}
-  item.count++;
+  if(!item || now-item.start>15*60*1000) {if(record)attempts.set(ip,{start:now,count:1});return false;}
+  if(record)item.count++;
   return item.count>30;
 }
 function room(db,voter) {
@@ -40,8 +40,8 @@ function room(db,voter) {
   const minOnline=now-PRESENCE_MS;
   db.exec('BEGIN IMMEDIATE');
   try {
-    db.prepare('UPDATE voter_sessions SET last_seen=?, expires_at=? WHERE voter_id=? AND session_hash=?')
-      .run(now,now+SESSION_MS,voter.id,voter.session_hash);
+    db.prepare('UPDATE voter_sessions SET last_seen=?, expires_at=? WHERE voter_id=? AND session_hash=? AND last_seen<?')
+      .run(now,now+SESSION_MS,voter.id,voter.session_hash,now-10000);
     const online=db.prepare(`SELECT COUNT(*) AS n FROM voter_sessions s JOIN voters v ON v.id=s.voter_id
        WHERE v.game_id=? AND s.last_seen>=? AND s.expires_at>?`).get(voter.gameId,minOnline,now).n;
     const total=db.prepare('SELECT COUNT(*) AS n FROM voters WHERE game_id=?').get(voter.gameId).n;
@@ -49,14 +49,14 @@ function room(db,voter) {
       db.prepare("UPDATE games SET status='active',started_at=? WHERE id=? AND status='draft'")
         .run(new Date(now).toISOString(),voter.gameId);
     }
-    const game=db.prepare('SELECT id,name,status,started_at AS startedAt FROM games WHERE id=?').get(voter.gameId);
+    const game=db.prepare('SELECT id,name,game_code AS gameCode,status,started_at AS startedAt FROM games WHERE id=?').get(voter.gameId);
     const participants=db.prepare('SELECT COUNT(*) AS n FROM participants WHERE game_id=?').get(voter.gameId).n;
     const questions=db.prepare('SELECT COUNT(*) AS n FROM questions WHERE game_id=?').get(voter.gameId).n;
     const voters=db.prepare(`SELECT v.name,CASE WHEN s.last_seen>=? AND s.expires_at>? THEN 1 ELSE 0 END AS online
       FROM voters v LEFT JOIN voter_sessions s ON s.voter_id=v.id WHERE v.game_id=? ORDER BY v.position`)
       .all(minOnline,now,voter.gameId).map(v=>({name:v.name,online:!!v.online}));
     db.exec('COMMIT');
-    return {gameId:game.id,gameName:game.name,status:game.status,startedAt:game.startedAt,
+    return {gameId:game.id,gameCode:game.gameCode,gameName:game.name,status:game.status,startedAt:game.startedAt,
       voterName:voter.name,voterCount:total,onlineCount:online,participantCount:participants,questionCount:questions,voters,
       stage:getStage(db,voter.gameId,voter.id)};
   } catch(e) {db.exec('ROLLBACK');throw e;}
@@ -73,11 +73,13 @@ export async function handleVoterApi(db,req,res,path,readJSON,origin) {
       if(limited(ip)) {respond(res,429,{error:'تعداد تلاش‌ها زیاد است. چند دقیقه بعد دوباره تلاش کنید.'});return true;}
       const body=await readJSON(req);
       const code=typeof body.code==='string' ? body.code.trim() : '';
-      if(!/^FB-[A-Za-z0-9_-]{24}$/.test(code)) {respond(res,401,{error:'کد ورود معتبر نیست.'});return true;}
-      const voter=db.prepare('SELECT id,game_id FROM voters WHERE token_hash=?').get(sha(code));
-      if(!voter) {respond(res,401,{error:'کد ورود معتبر نیست.'});return true;}
+      const gameCode=typeof body.gameCode==='string' ? body.gameCode.trim().toUpperCase() : '';
+      if(!/^[A-F0-9]{8}$/.test(gameCode)) {limited(ip,true);respond(res,401,{error:'کد بازی و کد حساب معتبر را وارد کنید.'});return true;}
+      if(!/^FB-[A-Za-z0-9_-]{24}$/.test(code)) {limited(ip,true);respond(res,401,{error:'کد ورود معتبر نیست.'});return true;}
+      const voter=db.prepare('SELECT v.id,v.game_id FROM voters v JOIN games g ON g.id=v.game_id WHERE v.token_hash=? AND g.game_code=?').get(sha(code),gameCode);
+      if(!voter) {limited(ip,true);respond(res,401,{error:'کد ورود معتبر نیست.'});return true;}
       const game=db.prepare('SELECT status FROM games WHERE id=?').get(voter.game_id);
-      if(!game || !['draft','active','completed'].includes(game.status)) {respond(res,409,{error:'این بازی برای ورود باز نیست.'});return true;}
+      if(!game || !['draft','active','paused','completed'].includes(game.status)) {respond(res,409,{error:'این بازی برای ورود باز نیست.'});return true;}
       // Serialize login attempts so two different devices cannot both take the seat.
       db.exec('BEGIN IMMEDIATE');
       let token;

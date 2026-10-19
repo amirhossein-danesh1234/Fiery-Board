@@ -2,8 +2,8 @@ import { createServer } from 'node:http';
 import { initVoterTables, handleVoterApi } from './voter-service.mjs';
 import { initGameEngine, getResults } from './game-engine.mjs';
 import { DatabaseSync } from 'node:sqlite';
-import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
-import { readFileSync, mkdirSync } from 'node:fs';
+import { randomBytes, createHash, timingSafeEqual, createCipheriv, createDecipheriv } from 'node:crypto';
+import { readFileSync, mkdirSync, writeFileSync } from 'node:fs';
 import { join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -15,6 +15,19 @@ const VOTER_ORIGIN = (process.env.VOTER_ORIGIN || process.env.PUBLIC_ORIGIN || '
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const SESSION_AGE = 60 * 60 * 12;
 const MAX_BODY = 512 * 1024;
+const codeKeys = new WeakMap();
+
+function encryptCode(db, code) {
+  const iv = randomBytes(12), cipher = createCipheriv('aes-256-gcm', codeKeys.get(db), iv);
+  const value = Buffer.concat([cipher.update(code, 'utf8'), cipher.final()]);
+  return Buffer.concat([iv, cipher.getAuthTag(), value]).toString('base64');
+}
+function decryptCode(db, value) {
+  const bytes = Buffer.from(value, 'base64');
+  const cipher = createDecipheriv('aes-256-gcm', codeKeys.get(db), bytes.subarray(0,12));
+  cipher.setAuthTag(bytes.subarray(12,28));
+  return Buffer.concat([cipher.update(bytes.subarray(28)), cipher.final()]).toString('utf8');
+}
 
 export function validateGame(raw) {
   if (!raw || typeof raw !== 'object') throw new Error('اطلاعات بازی نامعتبر است.');
@@ -78,7 +91,35 @@ export function initDatabase(path) {
   `);
   initVoterTables(db);
   initGameEngine(db);
+  const keyPath = resolve(path, '..', 'access-codes.key');
+  const hasEncryptedCodes=db.prepare('PRAGMA table_info(voters)').all().some(c=>c.name==='code_encrypted') &&
+    db.prepare('SELECT 1 FROM voters WHERE code_encrypted IS NOT NULL LIMIT 1').get();
+  if(hasEncryptedCodes) readFileSync(keyPath); // Never replace a missing key for existing encrypted codes.
+  try { writeFileSync(keyPath, randomBytes(32), { flag:'wx', mode:0o600 }); }
+  catch(e) { if(e.code !== 'EEXIST') throw e; }
+  const key = readFileSync(keyPath);
+  if(key.length !== 32) throw new Error('Invalid access code encryption key');
+  codeKeys.set(db, key);
+  const columns = db.prepare('PRAGMA table_info(games)').all();
+  if(!columns.some(c=>c.name==='game_code')) db.exec('ALTER TABLE games ADD COLUMN game_code TEXT');
+  if(!columns.some(c=>c.name==='resume_status')) db.exec('ALTER TABLE games ADD COLUMN resume_status TEXT');
+  if(!db.prepare('PRAGMA table_info(voters)').all().some(c=>c.name==='code_encrypted')) db.exec('ALTER TABLE voters ADD COLUMN code_encrypted TEXT');
+  db.exec('CREATE UNIQUE INDEX IF NOT EXISTS idx_game_code ON games(game_code)');
+  for(const game of db.prepare('SELECT id FROM games WHERE game_code IS NULL').all()) {
+    db.prepare('UPDATE games SET game_code=? WHERE id=?').run(newGameCode(db),game.id);
+  }
   return db;
+}
+
+function newGameCode(db) {
+  let code;
+  do { code = randomBytes(4).toString('hex').toUpperCase(); }
+  while(db.prepare('SELECT 1 FROM games WHERE game_code=?').get(code));
+  return code;
+}
+export function getCodes(db, id) {
+  return db.prepare('SELECT name,code_encrypted FROM voters WHERE game_id=? ORDER BY position').all(id)
+    .map(v=>({name:v.name,code:v.code_encrypted ? decryptCode(db,v.code_encrypted) : null}));
 }
 
 const uid = () => randomBytes(16).toString('hex');
@@ -91,33 +132,35 @@ const stableCompare = (a, b) => {
 export function createGame(db, raw) {
   const game = validateGame(raw);
   const id = uid();
+  const gameCode = newGameCode(db);
   const issuedCodes = [];
   db.exec('BEGIN IMMEDIATE');
   try {
     db.prepare('INSERT INTO games(id,name,description,show_votes,status,created_at) VALUES(?,?,?,?,?,?)').run(id, game.name, game.description, Number(game.showIndividualVotes), 'draft', new Date().toISOString());
+    db.prepare('UPDATE games SET game_code=? WHERE id=?').run(gameCode,id);
     const personStmt = db.prepare('INSERT INTO participants(id,game_id,position,name) VALUES(?,?,?,?)');
     game.participants.forEach((name, i) => personStmt.run(uid(), id, i, name));
     const questionStmt = db.prepare('INSERT INTO questions(id,game_id,position,text,weight) VALUES(?,?,?,?,?)');
     game.questions.forEach((q, i) => questionStmt.run(uid(), id, i, q.text, q.weight));
-    const voterStmt = db.prepare('INSERT INTO voters(id,game_id,position,name,token_hash) VALUES(?,?,?,?,?)');
+    const voterStmt = db.prepare('INSERT INTO voters(id,game_id,position,name,token_hash,code_encrypted) VALUES(?,?,?,?,?,?)');
     game.voters.forEach((name, i) => {
       const code = 'FB-' + randomBytes(18).toString('base64url');
-      voterStmt.run(uid(), id, i, name, hash(code));
+      voterStmt.run(uid(), id, i, name, hash(code), encryptCode(db,code));
       issuedCodes.push({ name, code });
     });
     db.exec('COMMIT');
-    return { gameId: id, codes: issuedCodes };
+    return { gameId: id, gameCode, codes: issuedCodes };
   } catch (e) { db.exec('ROLLBACK'); throw e; }
 }
 export function listGames(db) {
-  return db.prepare(`SELECT g.id,g.name,g.status,g.created_at AS createdAt,g.started_at AS startedAt,
+  return db.prepare(`SELECT g.id,g.name,g.game_code AS gameCode,g.status,g.created_at AS createdAt,g.started_at AS startedAt,
     (SELECT COUNT(*) FROM participants p WHERE p.game_id=g.id) AS participantCount,
     (SELECT COUNT(*) FROM questions q WHERE q.game_id=g.id) AS questionCount,
     (SELECT COUNT(*) FROM voters v WHERE v.game_id=g.id) AS voterCount
     FROM games g ORDER BY g.created_at DESC`).all();
 }
 export function getGame(db, id) {
-  const game = db.prepare('SELECT id,name,description,show_votes AS showIndividualVotes,status,created_at AS createdAt FROM games WHERE id=?').get(id);
+  const game = db.prepare('SELECT id,name,game_code AS gameCode,description,show_votes AS showIndividualVotes,status,created_at AS createdAt FROM games WHERE id=?').get(id);
   if (!game) return null;
   return {
     ...game, showIndividualVotes: Boolean(game.showIndividualVotes),
@@ -176,6 +219,7 @@ const files = { '/': ['public/index.html', 'text/html; charset=utf-8'], '/app.js
 
 files['/fonts/calibri-regular.woff'] = ['public/fonts/calibri-regular.woff', 'font/woff'];
 files['/fonts/calibri-bold.woff'] = ['public/fonts/calibri-bold.woff', 'font/woff'];
+for(let weight=100;weight<=900;weight+=100) files[`/fonts/peyda-${weight}.woff`] = [`public/fonts/peyda-${weight}.woff`, 'font/woff'];
 
 export function makeServer(db) {
   return createServer(async (req, res) => {
@@ -216,6 +260,48 @@ export function makeServer(db) {
         }
         if (pathname === '/api/games' && method === 'GET') return json(res, 200, { games: listGames(db) });
         if (pathname === '/api/games' && method === 'POST') return json(res, 201, createGame(db, await readJSON(req)));
+        const action = pathname.match(/^\/api\/games\/([a-f0-9]{32})\/(codes|reset-codes|pause|resume|delete)$/);
+        if(action) {
+          const id=action[1], name=action[2];
+          let game=getGame(db,id);
+          if(!game) return json(res,404,{error:'بازی پیدا نشد.'});
+          if(name==='codes' && method==='GET') return json(res,200,{gameId:id,gameCode:game.gameCode,codes:getCodes(db,id)});
+          if(method!=='POST') return json(res,405,{error:'روش درخواست معتبر نیست.'});
+          const body=await readJSON(req);
+          game=getGame(db,id);
+          if(!game) return json(res,404,{error:'بازی پیدا نشد.'});
+          if(name==='delete' || name==='reset-codes') {
+            if(body.confirm!==id) return json(res,400,{error:'تأیید عملیات معتبر نیست.'});
+          }
+          if(name==='pause') {
+            if(!['draft','active'].includes(game.status)) return json(res,409,{error:'فقط بازی در انتظار یا فعال قابل توقف است.'});
+            db.prepare("UPDATE games SET resume_status=status,status='paused' WHERE id=?").run(id);
+          } else if(name==='resume') {
+            if(game.status!=='paused') return json(res,409,{error:'بازی متوقف نیست.'});
+            db.prepare("UPDATE games SET status=COALESCE(resume_status,'draft'),resume_status=NULL WHERE id=?").run(id);
+          } else if(name==='reset-codes') {
+            if(!['draft','paused','completed'].includes(game.status)) return json(res,409,{error:'برای صدور مجدد کدها ابتدا بازی را متوقف کنید.'});
+            db.exec('BEGIN IMMEDIATE');
+            try {
+              for(const voter of db.prepare('SELECT id FROM voters WHERE game_id=?').all(id)) {
+                const code='FB-'+randomBytes(18).toString('base64url');
+                db.prepare('UPDATE voters SET token_hash=?,code_encrypted=? WHERE id=?').run(hash(code),encryptCode(db,code),voter.id);
+                db.prepare('DELETE FROM voter_sessions WHERE voter_id=?').run(voter.id);
+              }
+              db.exec('COMMIT');
+            } catch(e) { db.exec('ROLLBACK');throw e; }
+            return json(res,200,{gameId:id,gameCode:game.gameCode,codes:getCodes(db,id)});
+          } else if(name==='delete') {
+            db.exec('BEGIN IMMEDIATE');
+            try {
+              db.prepare('DELETE FROM votes WHERE game_id=?').run(id);
+              db.prepare('DELETE FROM games WHERE id=?').run(id);
+              db.exec('COMMIT');
+            } catch(e) { db.exec('ROLLBACK');throw e; }
+            return json(res,200,{deleted:true});
+          } else return json(res,405,{error:'روش درخواست معتبر نیست.'});
+          return json(res,200,{game:getGame(db,id)});
+        }
         const resultsMatch = pathname.match(/^\/api\/games\/([a-f0-9]{32})\/results$/);
         if(resultsMatch && method==='GET') {
           const report=getResults(db,resultsMatch[1],url.searchParams.get('participant'),true);

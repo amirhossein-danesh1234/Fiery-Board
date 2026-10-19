@@ -73,7 +73,7 @@ export function getResults(db,gameId,participantId,showIndividualVotes) {
   const ranking=participants.map(p=>{
     const averages=questions.map(q=>Number(avgStmt.get(gameId,p.id,q.id).average));
     const finalScore=questions.reduce((sum,q,i)=>sum+averages[i]*q.weight,0)/weightSum;
-    return {id:p.id,name:p.name,score:formatScore(finalScore)};
+    return {id:p.id,name:p.name,score:formatScore(finalScore),averages:averages.map(formatScore)};
   }).sort((a,b)=>b.score-a.score || a.name.localeCompare(b.name,'fa'));
   const selected=participants.find(p=>p.id===participantId)||participants[0];
   const showVotes=Boolean(showIndividualVotes);
