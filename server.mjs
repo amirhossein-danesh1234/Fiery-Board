@@ -1,5 +1,6 @@
 import { createServer } from 'node:http';
 import { initVoterTables, handleVoterApi } from './voter-service.mjs';
+import { initGameEngine, getResults } from './game-engine.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -9,7 +10,8 @@ import { fileURLToPath } from 'node:url';
 const root = fileURLToPath(new URL('.', import.meta.url));
 const PORT = Number(process.env.PORT || 3108);
 const DB_PATH = process.env.DB_PATH || '/data/fiery-board.sqlite';
-const ORIGIN = (process.env.PUBLIC_ORIGIN || 'https://fb-admin.amirhossein-danesh.ir').replace(/\/$/, '');
+const ADMIN_ORIGIN = (process.env.ADMIN_ORIGIN || process.env.PUBLIC_ORIGIN || 'https://fb-admin.amirhossein-danesh.ir').replace(/\/$/, '');
+const VOTER_ORIGIN = (process.env.VOTER_ORIGIN || process.env.PUBLIC_ORIGIN || 'https://fiery-board.amirhossein-danesh.ir').replace(/\/$/, '');
 const ADMIN_PASSWORD = process.env.ADMIN_PASSWORD || '';
 const SESSION_AGE = 60 * 60 * 12;
 const MAX_BODY = 512 * 1024;
@@ -75,6 +77,7 @@ export function initDatabase(path) {
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
   `);
   initVoterTables(db);
+  initGameEngine(db);
   return db;
 }
 
@@ -169,7 +172,7 @@ function allowLogin(ip) {
 }
 function failedLogin(ip) { const attempt = failedLogins.get(ip); if (attempt) attempt.count++; }
 function cookie(value, secure) { return `fb_session=${value}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${value ? SESSION_AGE : 0}${secure ? '; Secure' : ''}`; }
-const files = { '/': ['public/index.html', 'text/html; charset=utf-8'], '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'], '/vote': ['public/vote.html', 'text/html; charset=utf-8'], '/vote.js': ['public/vote.js', 'text/javascript; charset=utf-8'], '/vote.css': ['public/vote.css', 'text/css; charset=utf-8'] };
+const files = { '/': ['public/index.html', 'text/html; charset=utf-8'], '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'], '/vote': ['public/vote.html', 'text/html; charset=utf-8'], '/vote.js': ['public/vote.js', 'text/javascript; charset=utf-8'], '/vote.css': ['public/vote.css', 'text/css; charset=utf-8'], '/results': ['public/results.html', 'text/html; charset=utf-8'], '/results.js': ['public/results.js', 'text/javascript; charset=utf-8'], '/results.css': ['public/results.css', 'text/css; charset=utf-8'] };
 
 export function makeServer(db) {
   return createServer(async (req, res) => {
@@ -177,12 +180,17 @@ export function makeServer(db) {
     const url = new URL(req.url, 'http://localhost');
     const pathname = url.pathname;
     const method = req.method;
+    const host=(req.headers.host || '').split(':')[0].toLowerCase();
+    const publicHost=host==='fiery-board.amirhossein-danesh.ir';
+    const adminHost=host==='fb-admin.amirhossein-danesh.ir';
+    if(publicHost && ( pathname==='/app.js' || pathname==='/styles.css' || pathname.startsWith('/api/games') || pathname==='/api/login' || pathname==='/api/logout' || pathname==='/api/session')) return json(res,404,{error:'مسیر پیدا نشد.'});
+    if(adminHost && (pathname==='/vote' || pathname==='/vote.js' || pathname==='/vote.css' || pathname.startsWith('/api/voter/'))) return json(res,404,{error:'مسیر پیدا نشد.'});
     if (pathname === '/healthz') return json(res, 200, { ok: true });
     if (pathname.startsWith('/api/')) {
       if (!['GET', 'POST'].includes(method)) return json(res, 405, { error: 'روش درخواست پشتیبانی نمی‌شود.' });
-      if (method === 'POST' && req.headers.origin !== ORIGIN) return json(res, 403, { error: 'مبدأ درخواست معتبر نیست.' });
+      if (method === 'POST' && req.headers.origin !== (pathname.startsWith('/api/voter/') ? VOTER_ORIGIN : ADMIN_ORIGIN)) return json(res, 403, { error: 'مبدأ درخواست معتبر نیست.' });
       try {
-        if (await handleVoterApi(db,req,res,pathname,readJSON,ORIGIN)) return;
+        if (await handleVoterApi(db,req,res,pathname,readJSON,VOTER_ORIGIN)) return;
         if (pathname === '/api/session' && method === 'GET') return json(res, 200, { authenticated: loggedIn(db, req) });
         if (pathname === '/api/login' && method === 'POST') {
           const ip = req.socket.remoteAddress || 'unknown';
@@ -195,16 +203,21 @@ export function makeServer(db) {
           const token = randomBytes(32).toString('hex');
           db.prepare('DELETE FROM sessions WHERE expires_at<=?').run(Date.now());
           db.prepare('INSERT INTO sessions(session_hash,expires_at) VALUES (?,?)').run(hash(token), Date.now() + SESSION_AGE*1000);
-          return json(res, 200, { authenticated: true }, { 'Set-Cookie': cookie(token, ORIGIN.startsWith('https://')) });
+          return json(res, 200, { authenticated: true }, { 'Set-Cookie': cookie(token, ADMIN_ORIGIN.startsWith('https://')) });
         }
         if (!loggedIn(db, req)) return json(res, 401, { error: 'ابتدا وارد پنل مدیریت شوید.' });
         if (pathname === '/api/logout' && method === 'POST') {
           const token = parseCookies(req.headers.cookie).fb_session;
           if (token) db.prepare('DELETE FROM sessions WHERE session_hash=?').run(hash(token));
-          return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('', ORIGIN.startsWith('https://')) });
+          return json(res, 200, { ok: true }, { 'Set-Cookie': cookie('', ADMIN_ORIGIN.startsWith('https://')) });
         }
         if (pathname === '/api/games' && method === 'GET') return json(res, 200, { games: listGames(db) });
         if (pathname === '/api/games' && method === 'POST') return json(res, 201, createGame(db, await readJSON(req)));
+        const resultsMatch = pathname.match(/^\/api\/games\/([a-f0-9]{32})\/results$/);
+        if(resultsMatch && method==='GET') {
+          const report=getResults(db,resultsMatch[1],url.searchParams.get('participant'),true);
+          return !report ? json(res,404,{error:'بازی پیدا نشد.'}) : report.notReady ? json(res,409,{error:'نتایج هنوز آماده نیستند.'}) : json(res,200,{report});
+        }
         const match = pathname.match(/^\/api\/games\/([a-f0-9]{32})$/);
         if (match && method === 'GET') {
           const game = getGame(db, match[1]);
@@ -218,7 +231,7 @@ export function makeServer(db) {
       }
     }
     if (method !== 'GET' && method !== 'HEAD') { res.writeHead(405); return res.end(); }
-    const asset = files[pathname];
+    const asset = files[publicHost && pathname==='/' ? '/vote' : pathname];
     if (!asset) { res.writeHead(404); return res.end('Not found'); }
     try {
       const data = readFileSync(join(root, asset[0]));

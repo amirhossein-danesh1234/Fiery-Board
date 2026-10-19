@@ -1,13 +1,14 @@
 services:
-  fiery-board-admin:
+  fiery-board:
     build: .
-    image: fiery-board-admin:local
+    image: fiery-board:local
     restart: unless-stopped
     environment:
       NODE_ENV: production
       PORT: "3108"
       DB_PATH: /data/fiery-board.sqlite
-      PUBLIC_ORIGIN: https://fb-admin.amirhossein-danesh.ir
+      ADMIN_ORIGIN: https://fb-admin.amirhossein-danesh.ir
+      VOTER_ORIGIN: https://fiery-board.amirhossein-danesh.ir
       ADMIN_PASSWORD: ${ADMIN_PASSWORD:?Set a strong ADMIN_PASSWORD in .env}
     ports:
       - "127.0.0.1:3108:3108"

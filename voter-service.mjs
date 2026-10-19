@@ -1,4 +1,5 @@
 import { randomBytes, createHash } from 'node:crypto';
+import { getStage, submitVote, getResults } from './game-engine.mjs';
 
 // A single active device per code. Presence expires quickly; the login cookie survives refreshes.
 export const PRESENCE_MS = 45_000;
@@ -56,7 +57,8 @@ function room(db,voter) {
       .all(minOnline,now,voter.gameId).map(v=>({name:v.name,online:!!v.online}));
     db.exec('COMMIT');
     return {gameId:game.id,gameName:game.name,status:game.status,startedAt:game.startedAt,
-      voterName:voter.name,voterCount:total,onlineCount:online,participantCount:participants,questionCount:questions,voters};
+      voterName:voter.name,voterCount:total,onlineCount:online,participantCount:participants,questionCount:questions,voters,
+      stage:getStage(db,voter.gameId,voter.id)};
   } catch(e) {db.exec('ROLLBACK');throw e;}
 }
 export async function handleVoterApi(db,req,res,path,readJSON,origin) {
@@ -75,7 +77,7 @@ export async function handleVoterApi(db,req,res,path,readJSON,origin) {
       const voter=db.prepare('SELECT id,game_id FROM voters WHERE token_hash=?').get(sha(code));
       if(!voter) {respond(res,401,{error:'کد ورود معتبر نیست.'});return true;}
       const game=db.prepare('SELECT status FROM games WHERE id=?').get(voter.game_id);
-      if(!game || !['draft','active'].includes(game.status)) {respond(res,409,{error:'این بازی برای ورود باز نیست.'});return true;}
+      if(!game || !['draft','active','completed'].includes(game.status)) {respond(res,409,{error:'این بازی برای ورود باز نیست.'});return true;}
       // Serialize login attempts so two different devices cannot both take the seat.
       db.exec('BEGIN IMMEDIATE');
       let token;
@@ -105,6 +107,20 @@ export async function handleVoterApi(db,req,res,path,readJSON,origin) {
     }
     if(!voter) {respond(res,401,{error:'برای ورود کد اختصاصی خود را وارد کنید.'});return true;}
     if(path==='/api/voter/room' && method==='GET') {respond(res,200,room(db,voter));return true;}
+    if(path==='/api/voter/submit' && method==='POST') {
+      const body=await readJSON(req);
+      const result=submitVote(db,voter.gameId,voter.id,body.step,body.score);
+      if(result.error) respond(res,result.status,{error:result.error});
+      else respond(res,200,result);
+      return true;
+    }
+    if(path==='/api/voter/results' && method==='GET') {
+      const game=db.prepare('SELECT show_votes FROM games WHERE id=?').get(voter.gameId);
+      const report=getResults(db,voter.gameId,new URL(req.url,'http://localhost').searchParams.get('participant'),Boolean(game?.show_votes));
+      if(!report || report.notReady) respond(res,409,{error:'نتایج هنوز آماده نیستند.'});
+      else respond(res,200,{report});
+      return true;
+    }
     if(path==='/api/voter/logout' && method==='POST') {
       db.prepare('DELETE FROM voter_sessions WHERE voter_id=? AND session_hash=?').run(voter.id,voter.session_hash);
       respond(res,200,{ok:true},{'Set-Cookie':voterCookie('',secure)});return true;

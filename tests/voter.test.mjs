@@ -5,7 +5,7 @@ import {tmpdir} from 'node:os';
 import {join} from 'node:path';
 import {initDatabase,createGame,makeServer} from '../server.mjs';
 
-const ORIGIN='https://fb-admin.amirhossein-danesh.ir';
+const ORIGIN='https://fiery-board.amirhossein-danesh.ir';
 async function setup(count=3) {
   const dir=mkdtempSync(join(tmpdir(),'fiery-voter-'));
   const db=initDatabase(join(dir,'app.sqlite'));
