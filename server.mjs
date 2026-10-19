@@ -1,4 +1,5 @@
 import { createServer } from 'node:http';
+import { initVoterTables, handleVoterApi } from './voter-service.mjs';
 import { DatabaseSync } from 'node:sqlite';
 import { randomBytes, createHash, timingSafeEqual } from 'node:crypto';
 import { readFileSync, mkdirSync } from 'node:fs';
@@ -73,6 +74,7 @@ export function initDatabase(path) {
     CREATE INDEX IF NOT EXISTS idx_voters_game ON voters(game_id, position);
     CREATE INDEX IF NOT EXISTS idx_sessions_expiry ON sessions(expires_at);
   `);
+  initVoterTables(db);
   return db;
 }
 
@@ -167,7 +169,7 @@ function allowLogin(ip) {
 }
 function failedLogin(ip) { const attempt = failedLogins.get(ip); if (attempt) attempt.count++; }
 function cookie(value, secure) { return `fb_session=${value}; HttpOnly; Path=/; SameSite=Strict; Max-Age=${value ? SESSION_AGE : 0}${secure ? '; Secure' : ''}`; }
-const files = { '/': ['public/index.html', 'text/html; charset=utf-8'], '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'] };
+const files = { '/': ['public/index.html', 'text/html; charset=utf-8'], '/app.js': ['public/app.js', 'text/javascript; charset=utf-8'], '/styles.css': ['public/styles.css', 'text/css; charset=utf-8'], '/vote': ['public/vote.html', 'text/html; charset=utf-8'], '/vote.js': ['public/vote.js', 'text/javascript; charset=utf-8'], '/vote.css': ['public/vote.css', 'text/css; charset=utf-8'] };
 
 export function makeServer(db) {
   return createServer(async (req, res) => {
@@ -180,6 +182,7 @@ export function makeServer(db) {
       if (!['GET', 'POST'].includes(method)) return json(res, 405, { error: 'روش درخواست پشتیبانی نمی‌شود.' });
       if (method === 'POST' && req.headers.origin !== ORIGIN) return json(res, 403, { error: 'مبدأ درخواست معتبر نیست.' });
       try {
+        if (await handleVoterApi(db,req,res,pathname,readJSON,ORIGIN)) return;
         if (pathname === '/api/session' && method === 'GET') return json(res, 200, { authenticated: loggedIn(db, req) });
         if (pathname === '/api/login' && method === 'POST') {
           const ip = req.socket.remoteAddress || 'unknown';
