@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import {mkdtempSync,rmSync} from 'node:fs';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
+import {request as httpRequest} from 'node:http';
 import {initDatabase,createGame,makeServer} from '../server.mjs';
 import {parseScore,submitVote,getStage,getResults} from '../game-engine.mjs';
 
@@ -88,7 +89,12 @@ test('voter submits using authenticated code; results are private until game com
   assert.equal(r.data.report.counts.votes,8);
   const again=await request('/api/voter/submit','POST',{step:3,score:10},cookies[0]);
   assert.equal(again.status,409);
-  const direct=await fetch(base+'/',{headers:{Host:'fiery-board.amirhossein-danesh.ir'}});
-  assert.equal(direct.status,200);assert.match(await direct.text(),/ورود/);
+  // fetch() may override the Host header; use Node's HTTP client for hostname routing.
+  const html=await new Promise((resolve,reject)=>{
+    const req=httpRequest(base+'/',{headers:{Host:'fiery-board.amirhossein-danesh.ir'}},res=>{
+      let body='';res.setEncoding('utf8');res.on('data',x=>body+=x);res.on('end',()=>resolve({status:res.statusCode,body}));
+    });req.on('error',reject);req.end();
+  });
+  assert.equal(html.status,200);assert.match(html.body,/ورود رأی‌دهنده/);
  }finally{await new Promise(ok=>server.close(ok));t.finish();}
 });
