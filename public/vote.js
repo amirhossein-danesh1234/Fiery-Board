@@ -27,7 +27,7 @@ function waitView(){
 function normalizeScore(raw){
   const value=String(raw??'').trim().replace(/[۰-۹]/g,c=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(c)))
     .replace(/[٠-٩]/g,c=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(c))).replace(/[٫,]/g,'.');
-  if(!/^(?:\\d+(?:\\.\\d+)?|\\.\\d+)$/.test(value))return null;
+  if(!/^(?:\d+(?:\.\d+)?|\.\d+)$/.test(value))return null;
   const n=Number(value);return Number.isFinite(n)&&n>=0&&n<=10?n:null;
 }
 function voteView(){
