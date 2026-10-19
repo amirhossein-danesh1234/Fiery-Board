@@ -1,5 +1,5 @@
 const root=document.getElementById('voter-app');
-const state={authenticated:false,busy:false,error:'',room:null,lastSync:null,fetching:false};
+const state={authenticated:false,busy:false,error:'',room:null,lastSync:null,fetching:false,scoreDraft:'',voteError:'',submitting:false};
 const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const fa=n=>Number(n||0).toLocaleString('fa-IR');
 const icon=(name,size=21)=>{
@@ -23,15 +23,59 @@ function waitView(){
   const percent=total ? Math.round(100*online/total):0;
   return frame(`<section class="panel room-panel"><div class="room-title"><div class="room-icon">${icon(begun?'trophy':'users',29)}</div><div><h1>${begun?'بازی آغاز شد!':'اتاق انتظار'}</h1><p>${begun?'همه رأی‌دهندگان در زمان شروع بازی حاضر بودند.':`خوش آمدید، ${esc(room.voterName)}. منتظر ورود همه رأی‌دهندگان بمانید.`}</p></div><div class="live">${icon('refresh',18)} بررسی خودکار هر ۵ ثانیه</div></div><div class="game-title">${esc(room.gameName)}</div><div class="stat-grid"><div class="stat blue">${icon('users',25)}<small>تعداد رأی‌دهندگان</small><strong>${fa(total)} نفر</strong></div><div class="stat green">${icon('check',26)}<small>حاضر در اتاق</small><strong>${fa(online)} نفر</strong></div><div class="stat sky">${icon('file',25)}<small>تعداد سؤالات</small><strong>${fa(room.questionCount)} سؤال</strong></div><div class="stat purple">${icon('star',26)}<small>در حال ارزیابی</small><strong>${fa(room.participantCount)} نفر</strong></div></div><div class="progress-heading"><strong>${fa(online)} نفر از ${fa(total)} رأی‌دهنده حاضرند</strong><span>${fa(percent)}٪</span></div><div class="progress-track" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${percent}"><div class="progress-fill" style="width:${percent}%"></div></div><h2 class="roster-heading">وضعیت رأی‌دهندگان</h2><div class="roster" role="list">${room.voters.map((v,i)=>`<div class="roster-row" role="listitem"><span class="roster-number">${fa(i+1)}</span><strong>${esc(v.name)}</strong><span class="presence ${v.online?'here':'away'}">${v.online?'● وارد شده':'● در انتظار ورود'}</span></div>`).join('')}</div><div class="banner ${begun?'success':'pending'}">${icon(begun?'check':'clock',23)}<span>${begun?'ورود همه کاربران تأیید شد. بخش امتیازدهی در صفحه بعدی محصول پیاده‌سازی خواهد شد.':'با حضور تمام رأی‌دهندگان، بازی به‌صورت خودکار آغاز خواهد شد.'}</span></div>${state.error?`<p class="error" role="alert">${esc(state.error)}</p>`:''}<p class="sync">${state.lastSync?'آخرین همگام‌سازی: '+new Date(state.lastSync).toLocaleTimeString('fa-IR'):'در حال دریافت اطلاعات'}</p></section>`);
 }
-function render(){root.innerHTML=state.authenticated?waitView():loginView();}
+
+function normalizeScore(raw){
+  const value=String(raw??'').trim().replace(/[۰-۹]/g,c=>String('۰۱۲۳۴۵۶۷۸۹'.indexOf(c)))
+    .replace(/[٠-٩]/g,c=>String('٠١٢٣٤٥٦٧٨٩'.indexOf(c))).replace(/[٫,]/g,'.');
+  if(!/^(?:\\d+(?:\\.\\d+)?|\\.\\d+)$/.test(value))return null;
+  const n=Number(value);return Number.isFinite(n)&&n>=0&&n<=10?n:null;
+}
+function voteView(){
+  const {stage,gameName}=state.room;
+  if(!stage)return waitView();
+  const p=stage.participant,q=stage.question;
+  const peers=Array.from({length:Math.min(p.total,9)},(_,i)=>{
+    const start=Math.max(0,Math.min(p.index-5,p.total-9));
+    const pos=start+i+1;
+    return '<span class="step-node '+(pos===p.index?'current':pos<p.index?'past':'')+'">'+fa(pos)+'</span>';
+  }).join('');
+  const done=stage.submitted;
+  const percent=Math.round(100*(stage.currentStage+1)/stage.totalStages);
+  return frame(`<section class="vote-progress"><div class="progress-pill">مرحله ${fa(stage.currentStage+1)} از ${fa(stage.totalStages)}<small>سؤال ${fa(q.index)} · نفر ${fa(p.index)}</small></div><div class="stepper">${peers}</div><div class="progress-pill">سؤال ${fa(q.index)} از ${fa(q.total)}<small>${esc(gameName)}</small></div></section><main class="panel score-panel"><span class="voting-tag">${done?'نمره ثبت شده':'در حال ارزیابی'}</span><div class="candidate-symbol">${icon('users',32)}</div><h1>${esc(p.name)}</h1><div class="question-box"><span>سؤال ${fa(q.index)}</span><strong>${esc(q.text)}</strong></div>${done?`<div class="submitted-state"><div class="success-mark">${icon('check',33)}</div><h2>نمره شما ثبت شد</h2><p>در انتظار ثبت نمره سایر رأی‌دهندگان</p><div class="vote-counter">${fa(stage.submittedCount)} از ${fa(stage.voterCount)} نفر ثبت کرده‌اند</div></div>`:`<form id="score-form"><label for="score">نمره شما (از ۰ تا ۱۰)</label><input id="score" name="score" type="text" inputmode="decimal" autocomplete="off" placeholder="مثلاً ۸٫۵" value="${esc(state.scoreDraft)}" aria-describedby="score-hint" required/><small id="score-hint">فقط عدد بین ۰ تا ۱۰ مجاز است؛ اعشار پذیرفته می‌شود.</small>${state.voteError?`<div class="error" role="alert">${esc(state.voteError)}</div>`:''}<button class="primary vote-submit" type="submit" ${state.submitting?'disabled':''}>${state.submitting?'در حال ثبت...':'ثبت قطعی نمره'}</button></form>`}<div class="score-note">${icon('info',21)}<span>پس از ثبت نمره امکان ویرایش آن وجود ندارد. تا تکمیل رأی همه کاربران، مرحله بعدی باز نمی‌شود.</span></div><div class="vote-footer">پیشرفت بازی: ${fa(percent)}٪ · بررسی وضعیت هر ۵ ثانیه</div></main>`);
+}
+
+function render(){
+  if(!state.authenticated){root.innerHTML=loginView();return;}
+  if(state.room?.status==='completed'||state.room?.stage?.completed){location.replace('/results');return;}
+  root.innerHTML=state.room?.status==='active' && state.room.stage?.participant?voteView():waitView();
+}
 async function refresh(){
   if(!state.authenticated || state.fetching)return;
   state.fetching=true;
-  try{state.room=await api('/api/voter/room');state.error='';state.lastSync=Date.now();}
+  try{const next=await api('/api/voter/room');
+    const old=state.room?.stage;
+    if(!old || next.stage?.currentStage!==old.currentStage) {state.scoreDraft='';state.voteError='';}
+    const sameStep=old?.currentStage===next.stage?.currentStage;
+    const sameCounts=old?.submittedCount===next.stage?.submittedCount && old?.submitted===next.stage?.submitted;
+    const sameStatus=state.room?.status===next.status;
+    state.room=next;state.error='';state.lastSync=Date.now();
+    if(sameStep && sameCounts && sameStatus && next.status==='active' && !next.stage?.completed)return;
+  }
   catch(e){if(e.status===401){state.authenticated=false;state.room=null;}state.error=e.message;}
   finally{state.fetching=false;render();}
 }
 root.addEventListener('submit',async e=>{
+  if(e.target.id==='score-form'){
+    e.preventDefault();
+    if(state.submitting)return;
+    const score=normalizeScore(e.target.elements.score.value);
+    if(score===null){state.voteError='لطفاً یک عدد معتبر بین ۰ تا ۱۰ وارد کنید.';render();return;}
+    state.submitting=true;state.voteError='';
+    try{await api('/api/voter/submit',{method:'POST',body:JSON.stringify({step:state.room.stage.currentStage,score})});state.scoreDraft='';await refresh();}
+    catch(err){state.voteError=err.message;await refresh();}
+    finally{state.submitting=false;render();}
+    return;
+  }
   if(e.target.id!=='voter-login')return;
   e.preventDefault();
   const code=e.target.elements.code.value.trim();
@@ -41,6 +85,7 @@ root.addEventListener('submit',async e=>{
   catch(err){state.error=err.message;}
   finally{state.busy=false;render();}
 });
+root.addEventListener('input',e=>{if(e.target.id==='score')state.scoreDraft=e.target.value;});
 root.addEventListener('click',async e=>{
   if(!e.target.closest('#logout'))return;
   try{await api('/api/voter/logout',{method:'POST',body:'{}'});}catch{}
